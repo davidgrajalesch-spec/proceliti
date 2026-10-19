@@ -3,20 +3,13 @@ import pandas as pd
 import os
 from datetime import datetime, timedelta, time
 import io
-
-try:
-    import msal
-    import requests
-except ImportError:
-    os.system("pip install msal requests")
-    import msal
-    import requests
+import msal
+import requests
 
 try:
     import docx
     from docx import Document
 except ImportError:
-    os.system("pip install python-docx")
     import docx
     from docx import Document
 
