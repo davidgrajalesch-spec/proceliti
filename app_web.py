@@ -5,6 +5,14 @@ from datetime import datetime, timedelta, time
 import io
 
 try:
+    import msal
+    import requests
+except ImportError:
+    os.system("pip install msal requests")
+    import msal
+    import requests
+
+try:
     import docx
     from docx import Document
 except ImportError:
@@ -14,32 +22,71 @@ except ImportError:
 
 st.set_page_config(page_title="ProceLiti - Control de Comparendos D12", page_icon="⚖️", layout="wide")
 
-ARCHIVO_EXCEL = 'TablaProcesos.xlsx'
+def obtener_token():
+    try:
+        tenant_id = st.secrets["AZURE_TENANT_ID"]
+        client_id = st.secrets["AZURE_CLIENT_ID"]
+        client_secret = st.secrets["AZURE_CLIENT_SECRET"]
+        
+        authority = f"https://login.microsoftonline.com/{tenant_id}"
+        app = msal.ConfidentialClientApplication(
+            client_id,
+            authority=authority,
+            client_credential=client_secret,
+        )
+        result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
+        if "access_token" in result:
+            return result["access_token"]
+        return None
+    except Exception:
+        return None
 
 def cargar_datos():
-    columnas_requeridas = [
-        'Numero_Comparendo', 'Cedula_Ciudadano', 'Nombre_Ciudadano', 'Placa_Vehiculo', 
-        'Fecha_Infraccion', 'Nombre_Agente', 'Abogado_Impugnacion', 'Fecha_Version_Libre', 
-        'Version_Conductor', 'Pruebas_Decretadas_E1', 'Abogado_Pruebas', 'Fecha_Pruebas', 
-        'Errores_Diligenciamiento', 'Errores_Procedimiento', 'Hubo_Pago', 'Menciona_No_Pago',
-        'Precedentes_Favorables', 'Nota_Adicional', 'Abogado_Fallo', 'Fecha_Fallo', 
-        'Sentido_Fallo', 'Se_Presenta_Apelacion', '__PowerAppsId__'
-    ]
+    token = obtener_token()
+    if not token:
+        if os.path.exists("TablaProcesos.xlsx"):
+            return pd.read_excel("TablaProcesos.xlsx")
+        return pd.DataFrame()
     
-    if not os.path.exists(ARCHIVO_EXCEL):
-        df_vacio = pd.DataFrame(columns=columnas_requeridas)
-        df_vacio.to_excel(ARCHIVO_EXCEL, index=False)
+    user_email = st.secrets["ONEDRIVE_USER_EMAIL"]
+    url = f"https://graph.microsoft.com/v1.0/users/{user_email}/drive/root:/TablaProcesos.xlsx:/content"
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        try:
+            return pd.read_excel(io.BytesIO(response.content))
+        except Exception:
+            return pd.DataFrame()
+    elif response.status_code == 404:
+        df_vacio = pd.DataFrame()
+        guardar_datos(df_vacio)
         return df_vacio
-    
-    df = pd.read_excel(ARCHIVO_EXCEL, dtype=str)
-    for col in columnas_requeridas:
-        if col not in df.columns:
-            df[col] = ""
-            
-    return df.fillna("")
+    else:
+        if os.path.exists("TablaProcesos.xlsx"):
+            return pd.read_excel("TablaProcesos.xlsx")
+        return pd.DataFrame()
 
 def guardar_datos(df):
-    df.to_excel(ARCHIVO_EXCEL, index=False)
+    token = obtener_token()
+    if not token:
+        df.to_excel("TablaProcesos.xlsx", index=False)
+        return
+    
+    user_email = st.secrets["ONEDRIVE_USER_EMAIL"]
+    url = f"https://graph.microsoft.com/v1.0/users/{user_email}/drive/root:/TablaProcesos.xlsx:/content"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    }
+    
+    output = io.BytesIO()
+    df.to_excel(output, index=False)
+    output.seek(0)
+    
+    response = requests.put(url, headers=headers, data=output.getvalue())
+    if response.status_code not in [200, 201]:
+        df.to_excel("TablaProcesos.xlsx", index=False)
 
 df = cargar_datos()
 
