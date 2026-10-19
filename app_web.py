@@ -50,43 +50,45 @@ def cargar_datos():
     ]
 
     token = obtener_token()
-    df = None
-
-    if token:
-        user_email = st.secrets["ONEDRIVE_USER_EMAIL"]
-        # Busca en la raíz de OneDrive. Si lo ubicas dentro de la subcarpeta especificada,
-        # la URL puede cambiarse a: .../root:/1.%20David%20Grajales/Prueba%20Poweapps/TablaProcesos.xlsx:/content
-        url = f"https://graph.microsoft.com/v1.0/users/{user_email}/drive/root:/TablaProcesos.xlsx:/content"
+    if not token:
+        st.error("⚠️ Error MSAL: No se pudo obtener el Token de Azure (Verifica Client ID, Client Secret y Tenant ID).")
+    else:
+        user_email = st.secrets.get("ONEDRIVE_USER_EMAIL", "")
+        # Ruta apuntando a tu subcarpeta en OneDrive
+        url = f"https://graph.microsoft.com/v1.0/users/{user_email}/drive/root:/1.%20David%20Grajales/Prueba%20Poweapps/TablaProcesos.xlsx:/content"
         headers = {"Authorization": f"Bearer {token}"}
         
         try:
             response = requests.get(url, headers=headers)
             if response.status_code == 200:
                 df = pd.read_excel(io.BytesIO(response.content), dtype=str)
-        except Exception:
-            df = None
+                for col in columnas_requeridas:
+                    if col not in df.columns:
+                        df[col] = ""
+                return df.fillna("")
+            else:
+                st.warning(f"⚠️ Microsoft Graph devolvió Estado {response.status_code}: {response.text}")
+        except Exception as e:
+            st.error(f"⚠️ Error al conectar con OneDrive: {str(e)}")
 
-    # Respaldo local si no conecta a la API o si falla el token
-    if df is None:
-        if not os.path.exists(ARCHIVO_EXCEL):
-            df_vacio = pd.DataFrame(columns=columnas_requeridas)
-            df_vacio.to_excel(ARCHIVO_EXCEL, index=False)
-            return df_vacio
-        df = pd.read_excel(ARCHIVO_EXCEL, dtype=str)
-
+    # Respaldo local si la conexión falla
+    if not os.path.exists(ARCHIVO_EXCEL):
+        df_vacio = pd.DataFrame(columns=columnas_requeridas)
+        df_vacio.to_excel(ARCHIVO_EXCEL, index=False)
+        return df_vacio
+    
+    df = pd.read_excel(ARCHIVO_EXCEL, dtype=str)
     for col in columnas_requeridas:
         if col not in df.columns:
             df[col] = ""
-            
     return df.fillna("")
 
 def guardar_datos(df):
     token = obtener_token()
-    guardado_en_cloud = False
 
     if token:
-        user_email = st.secrets["ONEDRIVE_USER_EMAIL"]
-        url = f"https://graph.microsoft.com/v1.0/users/{user_email}/drive/root:/TablaProcesos.xlsx:/content"
+        user_email = st.secrets.get("ONEDRIVE_USER_EMAIL", "")
+        url = f"https://graph.microsoft.com/v1.0/users/{user_email}/drive/root:/1.%20David%20Grajales/Prueba%20Poweapps/TablaProcesos.xlsx:/content"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -99,11 +101,13 @@ def guardar_datos(df):
         try:
             response = requests.put(url, headers=headers, data=output.getvalue())
             if response.status_code in [200, 201]:
-                guardado_en_cloud = True
-        except Exception:
-            guardado_en_cloud = False
+                st.success("✅ Cambios guardados directamente en tu OneDrive.")
+            else:
+                st.warning(f"⚠️ Error al guardar en OneDrive (Estado {response.status_code})")
+        except Exception as e:
+            st.error(f"⚠️ Error guardando en OneDrive: {str(e)}")
 
-    # Guardado local de respaldo
+    # Respaldo local
     df.to_excel(ARCHIVO_EXCEL, index=False)
 
 
@@ -626,5 +630,4 @@ elif st.session_state.vista_actual == "Ficha Control de audiencia":
                         
                         guardar_datos(df)
                         st.session_state.editando_ficha = False
-                        st.success("✅ ¡Ficha guardada exitosamente en OneDrive!")
                         st.rerun()
