@@ -15,9 +15,9 @@ except ImportError:
 st.set_page_config(page_title="ProceLiti - Control de Comparendos D12", page_icon="⚖️", layout="wide")
 
 # ==============================================================================
-# CONFIGURACIÓN DE BASE DE DATOS Y RUTA (Conexión directa a OneDrive local)
+# CONFIGURACIÓN DE BASE DE DATOS Y RUTA (Ruta relativa para GitHub / Streamlit Cloud)
 # ==============================================================================
-ARCHIVO_EXCEL = r'C:\Users\USUARIO 1\OneDrive - PROCEDER S.A.S\1. David Grajales\Prueba Poweapps\TablaProcesos.xlsx'
+ARCHIVO_EXCEL = 'TablaProcesos.xlsx'
 
 def cargar_datos():
     columnas_requeridas = [
@@ -30,7 +30,6 @@ def cargar_datos():
     ]
     
     if not os.path.exists(ARCHIVO_EXCEL):
-        os.makedirs(os.path.dirname(ARCHIVO_EXCEL), exist_ok=True)
         df_vacio = pd.DataFrame(columns=columnas_requeridas)
         df_vacio.to_excel(ARCHIVO_EXCEL, index=False)
         return df_vacio
@@ -225,7 +224,6 @@ elif st.session_state.vista_actual == "Asignación de Audiencias" and rol_usuari
                         else:
                             idx_def = 0
                         
-                        # Solo lista desplegable sin cuadro de texto adicional
                         abv_sel = st.selectbox(f"Abogado Asignado ({row['Numero_Comparendo']})", abogados_lista, index=idx_def, key=f"abv_sel_{idx}")
                         actualizaciones[idx] = (col_abogado_etapa, abv_sel)
                     st.markdown("---")
