@@ -3,41 +3,21 @@ import pandas as pd
 import os
 from datetime import datetime, timedelta, time
 import io
-import msal
-import requests
 
 try:
     import docx
     from docx import Document
 except ImportError:
+    os.system("pip install python-docx")
     import docx
     from docx import Document
 
 st.set_page_config(page_title="ProceLiti - Control de Comparendos D12", page_icon="⚖️", layout="wide")
 
-ARCHIVO_EXCEL = 'TablaProcesos.xlsx'
-
 # ==============================================================================
-# FUNCIONES DE INTEGRACIÓN CON MICROSOFT GRAPH / ONEDRIVE
+# CONFIGURACIÓN DE BASE DE DATOS Y RUTA (Conexión directa a OneDrive local)
 # ==============================================================================
-def obtener_token():
-    try:
-        tenant_id = st.secrets["AZURE_TENANT_ID"]
-        client_id = st.secrets["AZURE_CLIENT_ID"]
-        client_secret = st.secrets["AZURE_CLIENT_SECRET"]
-        
-        authority = f"https://login.microsoftonline.com/{tenant_id}"
-        app = msal.ConfidentialClientApplication(
-            client_id,
-            authority=authority,
-            client_credential=client_secret,
-        )
-        result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
-        if "access_token" in result:
-            return result["access_token"]
-        return None
-    except Exception:
-        return None
+ARCHIVO_EXCEL = r'C:\Users\USUARIO 1\OneDrive - PROCEDER S.A.S\1. David Grajales\Prueba Poweapps\TablaProcesos.xlsx'
 
 def cargar_datos():
     columnas_requeridas = [
@@ -48,31 +28,9 @@ def cargar_datos():
         'Precedentes_Favorables', 'Nota_Adicional', 'Abogado_Fallo', 'Fecha_Fallo', 
         'Sentido_Fallo', 'Se_Presenta_Apelacion', '__PowerAppsId__'
     ]
-
-    token = obtener_token()
-    if not token:
-        st.error("⚠️ Error MSAL: No se pudo obtener el Token de Azure (Verifica Client ID, Client Secret y Tenant ID).")
-    else:
-        user_email = st.secrets.get("ONEDRIVE_USER_EMAIL", "")
-        # Ruta apuntando a tu subcarpeta en OneDrive
-        url = f"https://graph.microsoft.com/v1.0/users/{user_email}/drive/root:/1.%20David%20Grajales/Prueba%20Poweapps/TablaProcesos.xlsx:/content"
-        headers = {"Authorization": f"Bearer {token}"}
-        
-        try:
-            response = requests.get(url, headers=headers)
-            if response.status_code == 200:
-                df = pd.read_excel(io.BytesIO(response.content), dtype=str)
-                for col in columnas_requeridas:
-                    if col not in df.columns:
-                        df[col] = ""
-                return df.fillna("")
-            else:
-                st.warning(f"⚠️ Microsoft Graph devolvió Estado {response.status_code}: {response.text}")
-        except Exception as e:
-            st.error(f"⚠️ Error al conectar con OneDrive: {str(e)}")
-
-    # Respaldo local si la conexión falla
+    
     if not os.path.exists(ARCHIVO_EXCEL):
+        os.makedirs(os.path.dirname(ARCHIVO_EXCEL), exist_ok=True)
         df_vacio = pd.DataFrame(columns=columnas_requeridas)
         df_vacio.to_excel(ARCHIVO_EXCEL, index=False)
         return df_vacio
@@ -81,39 +39,12 @@ def cargar_datos():
     for col in columnas_requeridas:
         if col not in df.columns:
             df[col] = ""
+            
     return df.fillna("")
 
 def guardar_datos(df):
-    token = obtener_token()
-
-    if token:
-        user_email = st.secrets.get("ONEDRIVE_USER_EMAIL", "")
-        url = f"https://graph.microsoft.com/v1.0/users/{user_email}/drive/root:/1.%20David%20Grajales/Prueba%20Poweapps/TablaProcesos.xlsx:/content"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        }
-        
-        output = io.BytesIO()
-        df.to_excel(output, index=False)
-        output.seek(0)
-        
-        try:
-            response = requests.put(url, headers=headers, data=output.getvalue())
-            if response.status_code in [200, 201]:
-                st.success("✅ Cambios guardados directamente en tu OneDrive.")
-            else:
-                st.warning(f"⚠️ Error al guardar en OneDrive (Estado {response.status_code})")
-        except Exception as e:
-            st.error(f"⚠️ Error guardando en OneDrive: {str(e)}")
-
-    # Respaldo local
     df.to_excel(ARCHIVO_EXCEL, index=False)
 
-
-# ==============================================================================
-# CARGA INICIAL Y ESTADOS DE SESIÓN
-# ==============================================================================
 df = cargar_datos()
 
 if 'ficha_activa' not in st.session_state:
@@ -123,10 +54,22 @@ if 'editando_ficha' not in st.session_state:
 if 'vista_actual' not in st.session_state:
     st.session_state.vista_actual = "Master Procesos"
 
+# ==============================================================================
+# SELECTOR DE ROL Y NAVEGACIÓN EN BARRA LATERAL
+# ==============================================================================
+st.sidebar.markdown("### ⚙️ Control de Sesión")
+rol_usuario = st.sidebar.selectbox("Seleccione su Rol:", ["Abogado", "Administrador"])
+
+if rol_usuario == "Administrador":
+    opciones_menu = ["Master Procesos", "Asignación de Audiencias", "Registrar Nuevo Proceso"]
+else:
+    opciones_menu = ["Master Procesos"]
+    if st.session_state.vista_actual in ["Asignación de Audiencias", "Registrar Nuevo Proceso"]:
+        st.session_state.vista_actual = "Master Procesos"
+
 st.markdown("<h2 style='text-align: center; color: #ff5722;'>⚖️ PROCELITI - GESTIÓN JURÍDICA DE COMPARENDOS D12</h2>", unsafe_allow_html=True)
 st.markdown("---")
 
-opciones_menu = ["Master Procesos", "Asignación de Audiencias", "Registrar Nuevo Proceso"]
 idx_menu = 0
 if st.session_state.vista_actual in opciones_menu:
     idx_menu = opciones_menu.index(st.session_state.vista_actual)
@@ -195,9 +138,9 @@ if st.session_state.vista_actual == "Master Procesos":
     limite = st.selectbox("Ver resultados:", [10, 50, 100], index=0, key="limite_master")
 
 # ==============================================================================
-# 2. MÓDULO: ASIGNACIÓN DE AUDIENCIAS
+# 2. MÓDULO: ASIGNACIÓN DE AUDIENCIAS (Solo Administrador)
 # ==============================================================================
-elif st.session_state.vista_actual == "Asignación de Audiencias":
+elif st.session_state.vista_actual == "Asignación de Audiencias" and rol_usuario == "Administrador":
     st.subheader("📅 Asignación de Audiencias y Cronograma Semanal")
     
     st.markdown("#### Tabla General Ordenada Cronológicamente por Fecha de Impugnación")
@@ -282,14 +225,9 @@ elif st.session_state.vista_actual == "Asignación de Audiencias":
                         else:
                             idx_def = 0
                         
+                        # Solo lista desplegable sin cuadro de texto adicional
                         abv_sel = st.selectbox(f"Abogado Asignado ({row['Numero_Comparendo']})", abogados_lista, index=idx_def, key=f"abv_sel_{idx}")
-                        
-                        abv_otro = ""
-                        if abv_sel == "Otro":
-                            default_val_otro = val_actual if val_actual not in abogados_lista else ""
-                            abv_otro = st.text_input(f"Escriba nombre del abogado (Obligatorio)", value=default_val_otro, key=f"otro_input_{idx}")
-                            
-                        actualizaciones[idx] = (col_abogado_etapa, abv_otro if abv_sel == "Otro" else abv_sel)
+                        actualizaciones[idx] = (col_abogado_etapa, abv_sel)
                     st.markdown("---")
                     
                 col_btn1, col_btn2 = st.columns(2)
@@ -307,9 +245,9 @@ elif st.session_state.vista_actual == "Asignación de Audiencias":
             st.warning("No hay audiencias registradas (ni de impugnación, ni de pruebas, ni de fallo) en el rango de fechas seleccionado.")
 
 # ==============================================================================
-# 3. MÓDULO: REGISTRAR NUEVO PROCESO
+# 3. MÓDULO: REGISTRAR NUEVO PROCESO (Solo Administrador)
 # ==============================================================================
-elif st.session_state.vista_actual == "Registrar Nuevo Proceso":
+elif st.session_state.vista_actual == "Registrar Nuevo Proceso" and rol_usuario == "Administrador":
     st.subheader("➕ Registrar Nuevo Proceso")
     
     with st.form("form_nuevo_proceso"):
@@ -434,13 +372,6 @@ elif st.session_state.vista_actual == "Ficha Control de audiencia":
                 p2 = st.selectbox("2. Certificado seguridad vial", opts_p, index=get_idx_p(str(r['Pruebas_Decretadas_E1']), "Certificado seguridad vial"), disabled=disabled_state)
                 p3 = st.selectbox("3. Certificado antecedentes procuraduría", opts_p, index=get_idx_p(str(r['Pruebas_Decretadas_E1']), "Certificado antecedentes procuraduría"), disabled=disabled_state)
                 
-                tiene_otra_p = "Otra:" in str(r['Pruebas_Decretadas_E1'])
-                p_otro_sel = st.selectbox("4. Otra (Selector de Si y No)", ["NO", "SI"], index=1 if tiene_otra_p else 0, disabled=disabled_state)
-                p_otro_txt = ""
-                if p_otro_sel == "SI":
-                    default_otra_txt = str(r['Pruebas_Decretadas_E1']).split("Otra:")[-1].strip() if tiene_otra_p else ""
-                    p_otro_txt = st.text_input("Especifique otra prueba decretada (casilla obligatoria)", value=default_otra_txt, disabled=disabled_state)
-                
                 st.markdown("##### 3. Errores en diligenciamiento de Comparendo:")
                 e1 = st.checkbox("Casilla 10, sin diligenciar fecha de expedición/vencimiento, dirección, teléfono, municipio, edad, correo electrónico", value="Casilla 10" in str(r['Errores_Diligenciamiento']), key="ck_err_dil_10", disabled=disabled_state)
                 e2 = st.checkbox("Casilla 13, sin diligenciar datos del propietario", value="Casilla 13" in str(r['Errores_Diligenciamiento']), key="ck_err_dil_13", disabled=disabled_state)
@@ -448,11 +379,6 @@ elif st.session_state.vista_actual == "Ficha Control de audiencia":
                 e4 = st.checkbox("Casilla 17, sin diligenciar", value="Casilla 17" in str(r['Errores_Diligenciamiento']), key="ck_err_dil_17", disabled=disabled_state)
                 e5 = st.checkbox("Casilla 18, quien firma como testigo es un agente de tránsito", value="Casilla 18" in str(r['Errores_Diligenciamiento']), key="ck_err_dil_18", disabled=disabled_state)
                 e6 = st.checkbox("En las casillas sin marcar no se consignó ningún indicativo que determine el no diligenciamiento de estas.", value="Sin marcar" in str(r['Errores_Diligenciamiento']), key="ck_err_dil_sin_marcar", disabled=disabled_state)
-                
-                default_ed_txt = ""
-                if "Otro Errores Diligenciamiento:" in str(r['Errores_Diligenciamiento']):
-                    default_ed_txt = str(r['Errores_Diligenciamiento']).split("Otro Errores Diligenciamiento:")[-1].strip()
-                err_dil_otro_txt = st.text_input("Otro Errores Diligenciamiento (Cuadro de texto abierto)", value=default_ed_txt, disabled=disabled_state)
 
                 # (Tercer Cuadro "Audiencia De Pruebas")
                 st.markdown("---")
@@ -484,11 +410,6 @@ elif st.session_state.vista_actual == "Ficha Control de audiencia":
                 ep10 = st.checkbox("Procedimiento efectuado por varios agentes", value="Procedimiento efectuado por varios agentes" in str(r['Errores_Procedimiento']), key="ck_ep_10", disabled=disabled_state)
                 ep11 = st.checkbox("Violación de derechos fundamentales", value="Violación de derechos fundamentales" in str(r['Errores_Procedimiento']), key="ck_ep_11", disabled=disabled_state)
                 ep12 = st.checkbox("En desarrollo de la audiencia pública de impugnación, el operador jurídico interrogo al conductor durante la versión libre.", value="En desarrollo de la audiencia pública de impugnación, el operador jurídico interrogo al conductor durante la versión libre." in str(r['Errores_Procedimiento']), key="ck_ep_12", disabled=disabled_state)
-                
-                default_ep_txt = ""
-                if "Otro Error Procedimiento:" in str(r['Errores_Procedimiento']):
-                    default_ep_txt = str(r['Errores_Procedimiento']).split("Otro Error Procedimiento:")[-1].strip()
-                ep_otro_txt = st.text_input("Otro (Identificación de Errores en procedimiento - Cuadro de texto abierto)", value=default_ep_txt, disabled=disabled_state)
 
                 st.markdown("##### 3. Pago:")
                 opts_pago = ["", "SI", "NO"]
@@ -514,11 +435,6 @@ elif st.session_state.vista_actual == "Ficha Control de audiencia":
                 prec16 = st.checkbox("Error en la identificación del acompañante del SC", value="Error en la identificación del acompañante del SC" in str(r['Precedentes_Favorables']), key="ck_prec_16", disabled=disabled_state)
                 prec17 = st.checkbox("Falencias en el diligenciamiento del comparendo", value="Falencias en el diligenciamiento del comparendo" in str(r['Precedentes_Favorables']), key="ck_prec_17", disabled=disabled_state)
                 prec18 = st.checkbox("Caducidad desde la fecha de los hechos al fallo de primera instancia", value="Caducidad desde la fecha de los hechos al fallo de primera instancia" in str(r['Precedentes_Favorables']), key="ck_prec_18", disabled=disabled_state)
-                
-                default_pr_txt = ""
-                if "Otro Precedente:" in str(r['Precedentes_Favorables']):
-                    default_pr_txt = str(r['Precedentes_Favorables']).split("Otro Precedente:")[-1].strip()
-                prec_otro_txt = st.text_input("Otro Precedentes Favorables (Cuadro de texto abierto)", value=default_pr_txt, disabled=disabled_state)
 
                 st.markdown("##### 5. Nota Adicional:")
                 nota_adic = st.text_area("Entrada de texto para que el abogado diligencie comentario importante a tener en cuenta del caso", value=r['Nota_Adicional'], disabled=disabled_state)
@@ -543,91 +459,139 @@ elif st.session_state.vista_actual == "Ficha Control de audiencia":
                 apela = st.selectbox("Se Presenta Apelación:", ["", "SI", "NO"], index=0 if r['Se_Presenta_Apelacion']=="" else (1 if r['Se_Presenta_Apelacion']=="SI" else 2), disabled=disabled_state)
                 
                 st.markdown("---")
-                col_btn_f1, col_btn_f2 = st.columns(2)
-                with col_btn_f1:
-                    if st.form_submit_button("✏️ Habilitar Edición"):
-                        st.session_state.editando_ficha = True
-                        st.rerun()
-                with col_btn_f2:
-                    if st.form_submit_button("💾 Guardar Cambios en Ficha"):
-                        df.loc[i, 'Nombre_Ciudadano'] = nombre_sc
-                        df.loc[i, 'Cedula_Ciudadano'] = cc_sc
-                        df.loc[i, 'Numero_Comparendo'] = nro_comp
-                        df.loc[i, 'Placa_Vehiculo'] = placa_v
-                        df.loc[i, 'Fecha_Infraccion'] = f_inf
-                        df.loc[i, 'Nombre_Agente'] = n_agente
-                        
-                        df.loc[i, 'Abogado_Impugnacion'] = abv_vl
-                        df.loc[i, 'Fecha_Version_Libre'] = f"{f_vl_date.strftime('%Y-%m-%d')} {f_vl_time.strftime('%H:%M')}"
-                        df.loc[i, 'Version_Conductor'] = version_cond
-                        
-                        pruebas_list = []
-                        if p1 != "": pruebas_list.append(f"Declaración agente: {p1}")
-                        if p2 != "": pruebas_list.append(f"Certificado seguridad vial: {p2}")
-                        if p3 != "": pruebas_list.append(f"Certificado antecedentes procuraduría: {p3}")
-                        if p_otro_sel == "SI" and p_otro_txt != "": pruebas_list.append(f"Otra: {p_otro_txt}")
-                        df.loc[i, 'Pruebas_Decretadas_E1'] = " | ".join(pruebas_list)
-                        
-                        err_dil_list = []
-                        if e1: err_dil_list.append("Casilla 10")
-                        if e2: err_dil_list.append("Casilla 13")
-                        if e3: err_dil_list.append("Casilla 16")
-                        if e4: err_dil_list.append("Casilla 17")
-                        if e5: err_dil_list.append("Casilla 18")
-                        if e6: err_dil_list.append("Sin marcar")
-                        if err_dil_otro_txt != "": err_dil_list.append(f"Otro Errores Diligenciamiento: {err_dil_otro_txt}")
-                        df.loc[i, 'Errores_Diligenciamiento'] = " | ".join(err_dil_list)
-                        
-                        df.loc[i, 'Abogado_Pruebas'] = abv_p
-                        df.loc[i, 'Fecha_Pruebas'] = f"{f_p_date.strftime('%Y-%m-%d')} {f_p_time.strftime('%H:%M')}"
-                        
-                        err_proc_list = []
-                        if ep1: err_proc_list.append("El agente de tránsito interroga al conductor y a su acompañante.")
-                        if ep2: err_proc_list.append("No informan al presunto infractor a cerca de la razón del comparendo.")
-                        if ep3: err_proc_list.append("El conductor recibe por parte del agente de tránsito un mal trato y amenazas.")
-                        if ep4: err_proc_list.append("Se remolco más de un vehículo a la vez en la misma grúa.")
-                        if ep5: err_proc_list.append("Duración excesiva del tiempo de realización del procedimiento de imposición del comparendo.")
-                        if ep6: err_proc_list.append("El agente que solicita inicialmente los documentos al conductor es diferente al agente que se los entrega al terminar el procedimiento")
-                        if ep7: err_proc_list.append("El comparendo lo impone un agente diferente al que detuvo la marcha del vehículo.")
-                        if ep8: err_proc_list.append("El retén no cumple con los requisitos de ley puesto que carecía de la señalización y número de agentes exigidos por la norma")
-                        if ep9: err_proc_list.append("Procedimiento efectuado al conductor estando solo en el vehículo.")
-                        if ep10: err_proc_list.append("Procedimiento efectuado por varios agentes")
-                        if ep11: err_proc_list.append("Violación de derechos fundamentales")
-                        if ep12: err_proc_list.append("En desarrollo de la audiencia pública de impugnación, el operador jurídico interrogo al conductor durante la versión libre.")
-                        if ep_otro_txt != "": err_proc_list.append(f"Otro Error Procedimiento: {ep_otro_txt}")
-                        df.loc[i, 'Errores_Procedimiento'] = " | ".join(err_proc_list)
-                        
-                        df.loc[i, 'Hubo_Pago'] = hubo_pago
-                        df.loc[i, 'Menciona_No_Pago'] = menc_pago
-                        
-                        prec_list = []
-                        if prec1: prec_list.append("Conductor manifiesta estar acompañado en el procedimiento")
-                        if prec2: prec_list.append("Conductor manifiesta estar solo durante el procedimiento")
-                        if prec3: prec_list.append("Agente responde de forma incorrecta el interrogatorio")
-                        if prec4: prec_list.append("Agente manifiesta no recordar el procedimiento")
-                        if prec5: prec_list.append("Procedimiento efectuado por varios agentes")
-                        if prec6: prec_list.append("Agente acepta haber recolectado información durante imposición")
-                        if prec7: prec_list.append("Agente acepta NO observar pago")
-                        if prec8: prec_list.append("Agente rechaza contar con otro medio probatorio")
-                        if prec9: prec_list.append("Agente aporta pantallazo o fotografía como prueba")
-                        if prec10: prec_list.append("Agente aporta prueba videográfica")
-                        if prec11: prec_list.append("Agente conversa con un tercero y después persigue al conductor.")
-                        if prec12: prec_list.append("Conductor no escucha manifestaciones del tercero")
-                        if prec13: prec_list.append("Comparendo sin firmas")
-                        if prec14: prec_list.append("Conductor abordado en sitios distintos")
-                        if prec15: prec_list.append("El conductor abandona el lugar de los hechos")
-                        if prec16: prec_list.append("Error en la identificación del acompañante del SC")
-                        if prec17: prec_list.append("Falencias en el diligenciamiento del comparendo")
-                        if prec18: prec_list.append("Caducidad desde la fecha de los hechos al fallo de primera instancia")
-                        if prec_otro_txt != "": prec_list.append(f"Otro Precedente: {prec_otro_txt}")
-                        df.loc[i, 'Precedentes_Favorables'] = " | ".join(prec_list)
-                        
-                        df.loc[i, 'Nota_Adicional'] = nota_adic
-                        df.loc[i, 'Abogado_Fallo'] = abv_f
-                        df.loc[i, 'Fecha_Fallo'] = f"{f_f_date.strftime('%Y-%m-%d')} {f_f_time.strftime('%H:%M')}"
-                        df.loc[i, 'Sentido_Fallo'] = sent_f
-                        df.loc[i, 'Se_Presenta_Apelacion'] = apela
-                        
-                        guardar_datos(df)
-                        st.session_state.editando_ficha = False
-                        st.rerun()
+                
+                col_btn_g, col_btn_m = st.columns(2)
+                with col_btn_g:
+                    guardar_ficha = st.form_submit_button("Guardar Ficha")
+                with col_btn_m:
+                    modificar_ficha = st.form_submit_button("Modificar Ficha")
+                    
+                if guardar_ficha:
+                    err_dil_list = []
+                    if e1: err_dil_list.append("Casilla 10, sin diligenciar fecha de expedición/vencimiento, dirección, teléfono, municipio, edad, correo electrónico")
+                    if e2: err_dil_list.append("Casilla 13, sin diligenciar datos del propietario")
+                    if e3: err_dil_list.append("Casilla 16, sin diligenciar dirección del patio, placa de la grúa, consecutivo")
+                    if e4: err_dil_list.append("Casilla 17, sin diligenciar")
+                    if e5: err_dil_list.append("Casilla 18, quien firma como testigo es un agente de tránsito")
+                    if e6: err_dil_list.append("En las casillas sin marcar no se consignó ningún indicativo que determine el no diligenciamiento de estas.")
+
+                    err_proc_texts = [
+                        (ep1, "El agente de tránsito interroga al conductor y a su acompañante."),
+                        (ep2, "No informan al presunto infractor a cerca de la razón del comparendo."),
+                        (ep3, "El conductor recibe por parte del agente de tránsito un mal trato y amenazas."),
+                        (ep4, "Se remolco más de un vehículo a la vez en la misma grúa."),
+                        (ep5, "Duración excesiva del tiempo de realización del procedimiento de imposición del comparendo."),
+                        (ep6, "El agente que solicita inicialmente los documentos al conductor es diferente al agente que se los entrega al terminar el procedimiento"),
+                        (ep7, "El comparendo lo impone un agente diferente al que detuvo la marcha del vehículo."),
+                        (ep8, "El retén no cumple con los requisitos de ley puesto que carecía de la señalización y número de agentes exigidos por la norma (en el puesto de control se encontraba un solo agente)."),
+                        (ep9, "Procedimiento efectuado al conductor estando solo en el vehículo."),
+                        (ep10, "Procedimiento efectuado por varios agentes"),
+                        (ep11, "Violación de derechos fundamentales"),
+                        (ep12, "En desarrollo de la audiencia pública de impugnación, el operador jurídico interrogo al conductor durante la versión libre.")
+                    ]
+                    err_proc_list = [text for val, text in err_proc_texts if val]
+
+                    prec_texts = [
+                        (prec1, "Conductor manifiesta estar acompañado en el procedimiento"),
+                        (prec2, "Conductor manifiesta estar solo durante el procedimiento"),
+                        (prec3, "Agente responde de forma incorrecta el interrogatorio"),
+                        (prec4, "Agente manifiesta no recordar el procedimiento"),
+                        (prec5, "Procedimiento efectuado por varios agentes"),
+                        (prec6, "Agente acepta haber recolectado información durante imposición"),
+                        (prec7, "Agente acepta NO observar pago"),
+                        (prec8, "Agente rechaza contar con otro medio probatorio"),
+                        (prec9, "Agente aporta pantallazo o fotografía como prueba"),
+                        (prec10, "Agente aporta prueba videográfica"),
+                        (prec11, "Agente conversa con un tercero y después persigue al conductor."),
+                        (prec12, "Conductor no escucha manifestaciones del tercero"),
+                        (prec13, "Comparendo sin firmas"),
+                        (prec14, "Conductor abordado en sitios distintos"),
+                        (prec15, "El conductor abandona el lugar de los hechos"),
+                        (prec16, "Error en la identificación del acompañante del SC"),
+                        (prec17, "Falencias en el diligenciamiento del comparendo"),
+                        (prec18, "Caducidad desde la fecha de los hechos al fallo de primera instancia")
+                    ]
+                    prec_list = [text for val, text in prec_texts if val]
+
+                    fecha_vl_str = f"{f_vl_date.strftime('%Y-%m-%d')} {f_vl_time.strftime('%H:%M')}"
+                    fecha_p_str = f"{f_p_date.strftime('%Y-%m-%d')} {f_p_time.strftime('%H:%M')}"
+                    fecha_f_str = f"{f_f_date.strftime('%Y-%m-%d')} {f_f_time.strftime('%H:%M')}"
+
+                    df.loc[i, 'Nombre_Ciudadano'] = nombre_sc.upper()
+                    df.loc[i, 'Cedula_Ciudadano'] = cc_sc
+                    df.loc[i, 'Placa_Vehiculo'] = placa_v.upper()
+                    df.loc[i, 'Fecha_Infraccion'] = f_inf
+                    df.loc[i, 'Nombre_Agente'] = n_agente.upper()
+                    df.loc[i, 'Abogado_Impugnacion'] = abv_vl
+                    df.loc[i, 'Fecha_Version_Libre'] = fecha_vl_str
+                    df.loc[i, 'Version_Conductor'] = version_cond
+                    df.loc[i, 'Pruebas_Decretadas_E1'] = f"Declaración agente: {p1}, Certificado seguridad vial: {p2}, Certificado antecedentes procuraduría: {p3}"
+                    df.loc[i, 'Errores_Diligenciamiento'] = " | ".join(err_dil_list)
+                    df.loc[i, 'Abogado_Pruebas'] = abv_p
+                    df.loc[i, 'Fecha_Pruebas'] = fecha_p_str
+                    df.loc[i, 'Errores_Procedimiento'] = " | ".join(err_proc_list)
+                    df.loc[i, 'Hubo_Pago'] = hubo_pago
+                    df.loc[i, 'Menciona_No_Pago'] = menc_pago
+                    df.loc[i, 'Precedentes_Favorables'] = " | ".join(prec_list)
+                    df.loc[i, 'Nota_Adicional'] = nota_adic
+                    df.loc[i, 'Abogado_Fallo'] = abv_f
+                    df.loc[i, 'Fecha_Fallo'] = fecha_f_str
+                    df.loc[i, 'Sentido_Fallo'] = sent_f
+                    df.loc[i, 'Se_Presenta_Apelacion'] = apela
+                    
+                    guardar_datos(df)
+                    st.session_state.editando_ficha = False
+                    st.success("✅ ¡Ficha guardada y Master actualizado exitosamente!")
+                    st.rerun()
+                    
+                if modificar_ficha:
+                    st.session_state.editando_ficha = True
+                    st.success("🔓 Ficha habilitada para edición.")
+                    st.rerun()
+
+        st.markdown("---")
+        st.markdown("### 📤 Exportar Ficha Oficial en Word")
+        
+        if st.button("📥 Generar y Descargar Ficha en Word (.docx)"):
+            doc = Document()
+            doc.add_heading("PROCESO CONTRAVENCIONAL", 0)
+            doc.add_heading("FICHA: CONTROL AUDIENCIAS", level=1)
+            
+            doc.add_heading("Audiencia versión libre", level=2)
+            doc.add_paragraph(f"Nombre S.C: {r['Nombre_Ciudadano']}")
+            doc.add_paragraph(f"CC.: {r['Cedula_Ciudadano']}")
+            doc.add_paragraph(f"Nro. Comparendo: {r['Numero_Comparendo']}")
+            doc.add_paragraph(f"Placa del vehículo: {r['Placa_Vehiculo']}")
+            doc.add_paragraph(f"Fecha de la presunta infracción: {r['Fecha_Infraccion']}")
+            doc.add_paragraph(f"Nombre del agente: {r['Nombre_Agente']}")
+            doc.add_paragraph(f"Abogado primera audiencia: {r['Abogado_Impugnacion']}")
+            doc.add_paragraph(f"Fecha audiencia versión libre: {r['Fecha_Version_Libre']}")
+            doc.add_paragraph(f"Versión del conductor: {r['Version_Conductor']}")
+            doc.add_paragraph(f"Pruebas decretadas: {r['Pruebas_Decretadas_E1']}")
+            doc.add_paragraph(f"Errores en diligenciamiento: {r['Errores_Diligenciamiento']}")
+            
+            doc.add_heading("Audiencia de pruebas y alegatos de conclusión", level=2)
+            doc.add_paragraph(f"Abogado segunda audiencia: {r['Abogado_Pruebas']}")
+            doc.add_paragraph(f"Fecha audiencia de pruebas: {r['Fecha_Pruebas']}")
+            doc.add_paragraph(f"Errores en procedimiento: {r['Errores_Procedimiento']}")
+            doc.add_paragraph(f"¿Hubo pago?: {r['Hubo_Pago']}")
+            doc.add_paragraph(f"Se menciona que no hubo pago en la versión libre: {r['Menciona_No_Pago']}")
+            doc.add_paragraph(f"Observaciones del caso (Precedentes favorables): {r['Precedentes_Favorables']}")
+            doc.add_paragraph(f"Nota adicional: {r['Nota_Adicional']}")
+            
+            doc.add_heading("Audiencia de fallo y recurso de apelación", level=2)
+            doc.add_paragraph(f"Abogado tercera audiencia: {r['Abogado_Fallo']}")
+            doc.add_paragraph(f"Fecha de fallo: {r['Fecha_Fallo']}")
+            doc.add_paragraph(f"Sentido del fallo: {r['Sentido_Fallo']}")
+            doc.add_paragraph(f"Se presentó recurso de apelación: {r['Se_Presenta_Apelacion']}")
+            
+            bio = io.BytesIO()
+            doc.save(bio)
+            bio.seek(0)
+            
+            st.download_button(
+                label="📥 Descargar Documento Word Oficial",
+                data=bio,
+                file_name=f"Ficha_Control_Audiencias_{comp_activo}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
